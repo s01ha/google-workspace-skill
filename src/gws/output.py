@@ -78,28 +78,15 @@ def output_external_content(
     if account:
         gws_config = gws_config.load_effective_config(account)
 
-    # Determine if we should skip wrapping
-    skip_wrapping = (
+    skip = (
         not gws_config.security_enabled
         or not gws_config.is_security_enabled_for_operation(operation)
         or gws_config.is_allowlisted(source_type, source_id)
     )
 
-    if skip_wrapping:
-        # Output without security wrapping
-        response = {
-            "status": "success",
-            "operation": operation,
-            "source_id": source_id,
-            **content_fields,
-            **kwargs,
-        }
-        output_json(response)
-        return
-
-    # Security enabled - wrap content with session markers
+    security_config = None if skip else load_security_config()
     start, end = _get_session_markers()
-    security_config = load_security_config()
+
     response = _output_external_content(
         operation=operation,
         source_type=source_type,
@@ -108,6 +95,7 @@ def output_external_content(
         start_marker=start,
         end_marker=end,
         config=security_config,
+        skip_wrapping=skip,
         **kwargs,
     )
     output_json(response)
