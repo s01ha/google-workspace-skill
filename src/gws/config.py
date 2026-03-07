@@ -238,7 +238,10 @@ class Config:
         """Check if a source is in the allowlist."""
         if source_type in ("email", "message"):
             return source_id in self.allowlisted_emails
-        elif source_type in ("document", "docs", "spreadsheet", "sheets", "slides"):
+        elif source_type in (
+            "document", "docs", "spreadsheet", "sheets", "slides",
+            "calendar", "contact",
+        ):
             return source_id in self.allowlisted_documents
         return False
 

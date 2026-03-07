@@ -169,7 +169,7 @@ uvx gws-cli account config-reset work         # Reset to global defaults
 
 ## Security
 
-External content from Google Workspace (emails, documents, etc.) is wrapped with security markers via [prompt-security-utils](https://github.com/andmarios/prompt-security-utils) to protect against prompt injection attacks when used with LLMs.
+All external content from Google Workspace is wrapped with security markers via [prompt-security-utils](https://github.com/andmarios/prompt-security-utils) to protect against prompt injection attacks when used with LLMs. This covers all read operations across every service: emails, documents, spreadsheets, slides, calendar events, drive files/comments, and contacts.
 
 Configuration uses a two-tier model:
 

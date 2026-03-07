@@ -1,12 +1,13 @@
 """Google Calendar service operations."""
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
 from googleapiclient.errors import HttpError
 
 from gws.services.base import BaseService
-from gws.output import output_success, output_error
+from gws.output import output_error, output_external_content, output_success
 from gws.exceptions import ExitCode
 
 
@@ -36,10 +37,12 @@ class CalendarService(BaseService):
                 for cal in result.get("items", [])
             ]
 
-            output_success(
+            output_external_content(
                 operation="calendar.list_calendars",
+                source_type="calendar",
+                source_id="calendar.list_calendars",
+                content_fields={"calendars": json.dumps(calendars, default=str)},
                 calendar_count=len(calendars),
-                calendars=calendars,
             )
             return result
         except HttpError as e:
@@ -101,11 +104,13 @@ class CalendarService(BaseService):
                     event_data["color_id"] = event["colorId"]
                 events.append(event_data)
 
-            output_success(
+            output_external_content(
                 operation="calendar.list",
-                calendar_id=calendar_id,
+                source_type="calendar",
+                source_id=f"calendar.list:{calendar_id}",
+                content_fields={"events": json.dumps(events, default=str)},
                 event_count=len(events),
-                events=events,
+                next_page_token=result.get("nextPageToken"),
             )
             return result
         except HttpError as e:
@@ -131,19 +136,25 @@ class CalendarService(BaseService):
             start = event.get("start", {})
             end = event.get("end", {})
 
-            output_success(
+            attendees = [
+                {"email": a["email"], "response": a.get("responseStatus", "")}
+                for a in event.get("attendees", [])
+            ]
+            output_external_content(
                 operation="calendar.get",
+                source_type="calendar",
+                source_id=f"calendar.get:{event['id']}",
+                content_fields={
+                    "summary": event.get("summary", "(no title)"),
+                    "location": event.get("location", ""),
+                    "description": event.get("description", ""),
+                    "attendees": json.dumps(attendees, default=str),
+                },
                 event_id=event["id"],
-                summary=event.get("summary", "(no title)"),
+                calendar_id=calendar_id,
                 start=start.get("dateTime", start.get("date", "")),
                 end=end.get("dateTime", end.get("date", "")),
-                location=event.get("location", ""),
-                description=event.get("description", ""),
                 status=event.get("status", ""),
-                attendees=[
-                    {"email": a["email"], "response": a.get("responseStatus", "")}
-                    for a in event.get("attendees", [])
-                ],
                 html_link=event.get("htmlLink", ""),
             )
             return event
@@ -403,11 +414,12 @@ class CalendarService(BaseService):
                     "status": event.get("status", ""),
                 })
 
-            output_success(
+            output_external_content(
                 operation="calendar.get_instances",
-                event_id=event_id,
+                source_type="calendar",
+                source_id=f"calendar.instances:{event_id}",
+                content_fields={"instances": json.dumps(instances, default=str)},
                 instance_count=len(instances),
-                instances=instances,
             )
             return result
         except HttpError as e:
@@ -563,12 +575,16 @@ class CalendarService(BaseService):
                 for a in event.get("attendees", [])
             ]
 
-            output_success(
+            output_external_content(
                 operation="calendar.get_attendees",
+                source_type="calendar",
+                source_id=f"calendar.attendees:{event_id}",
+                content_fields={
+                    "summary": event.get("summary", ""),
+                    "attendees": json.dumps(attendees, default=str),
+                },
                 event_id=event_id,
-                summary=event.get("summary", ""),
                 attendee_count=len(attendees),
-                attendees=attendees,
             )
             return {"event_id": event_id, "attendees": attendees}
         except HttpError as e:

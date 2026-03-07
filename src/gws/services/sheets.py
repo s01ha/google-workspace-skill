@@ -47,11 +47,15 @@ class SheetsService(BaseService):
                 for sheet in spreadsheet.get("sheets", [])
             ]
 
-            output_success(
+            output_external_content(
                 operation="sheets.metadata",
+                source_type="spreadsheet",
+                source_id=spreadsheet_id,
+                content_fields={
+                    "title": json.dumps(spreadsheet.get("properties", {}).get("title", "")),
+                    "sheets": json.dumps(sheets),
+                },
                 spreadsheet_id=spreadsheet_id,
-                title=spreadsheet.get("properties", {}).get("title", ""),
-                sheets=sheets,
                 sheet_count=len(sheets),
             )
             return spreadsheet

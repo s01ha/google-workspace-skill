@@ -1,6 +1,7 @@
 """Google Docs service operations."""
 
 import io
+import json
 from pathlib import Path
 from typing import Any
 
@@ -151,12 +152,16 @@ class DocsService(BaseService):
             tabs = doc.get("tabs", [])
             tabs_info = self._extract_tabs_info(tabs)
 
-            output_success(
+            output_external_content(
                 operation="docs.list_tabs",
+                source_type="document",
+                source_id=document_id,
+                content_fields={
+                    "title": doc.get("title", ""),
+                    "tabs": json.dumps(tabs_info),
+                },
                 document_id=document_id,
-                title=doc.get("title", ""),
                 tab_count=len(tabs_info),
-                tabs=tabs_info,
             )
             return {"tabs": tabs_info}
         except HttpError as e:
@@ -399,13 +404,12 @@ class DocsService(BaseService):
 
             headings = self._extract_structure(content)
 
-            output_success(
+            output_external_content(
                 operation="docs.structure",
+                source_type="document",
+                source_id=document_id,
+                content_fields={"headings": json.dumps(headings, default=str)},
                 document_id=document_id,
-                title=doc.get("title", ""),
-                tab_id=tab_id,
-                headings=headings,
-                heading_count=len(headings),
             )
             return {"headings": headings}
         except HttpError as e:
@@ -2108,11 +2112,15 @@ class DocsService(BaseService):
                     "content": content[:200] if content else "",
                 })
 
-            output_success(
+            output_external_content(
                 operation="docs.get_headers_footers",
+                source_type="document",
+                source_id=document_id,
+                content_fields={
+                    "headers": json.dumps(header_info, default=str),
+                    "footers": json.dumps(footer_info, default=str),
+                },
                 document_id=document_id,
-                headers=header_info,
-                footers=footer_info,
             )
             return {"headers": header_info, "footers": footer_info}
         except HttpError as e:
@@ -2848,11 +2856,13 @@ class DocsService(BaseService):
 
             suggestion_list = list(grouped.values())
 
-            output_success(
+            output_external_content(
                 operation="docs.get_suggestions",
+                source_type="document",
+                source_id=document_id,
+                content_fields={"suggestions": json.dumps(suggestion_list, default=str)},
                 document_id=document_id,
                 suggestion_count=len(suggestion_list),
-                suggestions=suggestion_list,
             )
             return {"suggestions": suggestion_list}
         except HttpError as e:

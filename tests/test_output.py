@@ -170,14 +170,16 @@ class TestOutputExternalContent:
                 thread_id="thread-1",
             )
 
-        mock_oec.assert_called_once_with(
-            operation="gmail.read",
-            source_type="email",
-            source_id="msg-1",
-            content_fields={"body": "Hello"},
-            config=mock_security_cfg,
-            thread_id="thread-1",
-        )
+        mock_oec.assert_called_once()
+        call_kwargs = mock_oec.call_args[1]
+        assert call_kwargs["operation"] == "gmail.read"
+        assert call_kwargs["source_type"] == "email"
+        assert call_kwargs["source_id"] == "msg-1"
+        assert call_kwargs["content_fields"] == {"body": "Hello"}
+        assert call_kwargs["config"] is mock_security_cfg
+        assert call_kwargs["thread_id"] == "thread-1"
+        assert "start_marker" in call_kwargs
+        assert "end_marker" in call_kwargs
 
     def test_kwargs_passed_through_when_skipped(self, capsys):
         """Extra kwargs appear in output when security is skipped."""
@@ -354,3 +356,39 @@ class TestOutputExternalContent:
 
         captured = json.loads(capsys.readouterr().out)
         assert captured["content"]["trust_level"] == "external"
+
+    def test_calendar_allowlisted_skips_wrapping(self, capsys):
+        """Calendar source type checks against allowlisted_documents."""
+        config = Config()
+        config.security_enabled = True
+        config.allowlisted_documents = ["cal-event-123"]
+
+        with patch.object(Config, "load", return_value=config), \
+             patch("gws.context.get_active_account", return_value=None):
+            output_external_content(
+                operation="calendar.get",
+                source_type="calendar",
+                source_id="cal-event-123",
+                content_fields={"summary": "Team meeting"},
+            )
+
+        captured = json.loads(capsys.readouterr().out)
+        assert captured["summary"] == "Team meeting"
+
+    def test_contact_allowlisted_skips_wrapping(self, capsys):
+        """Contact source type checks against allowlisted_documents."""
+        config = Config()
+        config.security_enabled = True
+        config.allowlisted_documents = ["people/c999"]
+
+        with patch.object(Config, "load", return_value=config), \
+             patch("gws.context.get_active_account", return_value=None):
+            output_external_content(
+                operation="contacts.get",
+                source_type="contact",
+                source_id="people/c999",
+                content_fields={"name": "Alice"},
+            )
+
+        captured = json.loads(capsys.readouterr().out)
+        assert captured["name"] == "Alice"

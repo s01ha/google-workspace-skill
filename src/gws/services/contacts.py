@@ -1,11 +1,12 @@
 """Google Contacts (People API) service operations."""
 
+import json
 from typing import Any
 
 from googleapiclient.errors import HttpError
 
 from gws.services.base import BaseService
-from gws.output import output_success, output_error
+from gws.output import output_success, output_error, output_external_content
 from gws.exceptions import ExitCode
 
 
@@ -59,10 +60,12 @@ class ContactsService(BaseService):
                 }
                 contacts.append(contact)
 
-            output_success(
+            output_external_content(
                 operation="contacts.list",
+                source_type="contact",
+                source_id="contacts.list",
+                content_fields={"contacts": json.dumps(contacts, default=str)},
                 contact_count=len(contacts),
-                contacts=contacts,
             )
             return result
         except HttpError as e:
@@ -106,16 +109,23 @@ class ContactsService(BaseService):
                 )
             )
 
-            output_success(
+            emails = [e.get("value", "") for e in person.get("emailAddresses", [])]
+            phones = [p.get("value", "") for p in person.get("phoneNumbers", [])]
+            addresses = [
+                a.get("formattedValue", "") for a in person.get("addresses", [])
+            ]
+            output_external_content(
                 operation="contacts.get",
+                source_type="contact",
+                source_id=person.get("resourceName", resource_name),
+                content_fields={
+                    "name": self._get_name(person),
+                    "organization": self._get_organization(person),
+                    "emails": json.dumps(emails, default=str),
+                    "phones": json.dumps(phones, default=str),
+                    "addresses": json.dumps(addresses, default=str),
+                },
                 resource_name=person.get("resourceName", ""),
-                name=self._get_name(person),
-                emails=[e.get("value", "") for e in person.get("emailAddresses", [])],
-                phones=[p.get("value", "") for p in person.get("phoneNumbers", [])],
-                organization=self._get_organization(person),
-                addresses=[
-                    a.get("formattedValue", "") for a in person.get("addresses", [])
-                ],
             )
             return person
         except HttpError as e:
@@ -691,11 +701,12 @@ class ContactsService(BaseService):
                     "title": orgs[0].get("title") if orgs else None,
                 })
 
-            output_success(
+            output_external_content(
                 operation="contacts.search_directory",
-                query=query,
-                count=len(people),
-                people=people,
+                source_type="contact",
+                source_id=f"contacts.directory:{query}",
+                content_fields={"people": json.dumps(people, default=str)},
+                people_count=len(people),
             )
             return result
         except HttpError as e:

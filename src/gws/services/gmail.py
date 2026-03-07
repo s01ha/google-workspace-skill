@@ -1,6 +1,7 @@
 """Google Gmail service operations."""
 
 import base64
+import json
 import mimetypes
 import os
 from email import encoders
@@ -92,15 +93,19 @@ class GmailService(BaseService):
                         "snippet": msg.get("snippet", "")[:100],
                     })
 
-            output_kwargs: dict[str, Any] = {
-                "operation": "gmail.list",
+            ext_kwargs: dict[str, Any] = {
                 "message_count": len(messages),
-                "messages": messages,
                 "next_page_token": result.get("nextPageToken"),
             }
             if batch_errors:
-                output_kwargs["failed_ids"] = batch_errors
-            output_success(**output_kwargs)
+                ext_kwargs["failed_ids"] = batch_errors
+            output_external_content(
+                operation="gmail.list",
+                source_type="email",
+                source_id=f"gmail.list:{query or 'all'}",
+                content_fields={"messages": json.dumps(messages, default=str)},
+                **ext_kwargs,
+            )
             return result
         except HttpError as e:
             output_error(
@@ -693,10 +698,12 @@ class GmailService(BaseService):
                         "snippet": msg.get("snippet", "")[:100],
                     })
 
-            output_success(
+            output_external_content(
                 operation="gmail.list_drafts",
+                source_type="email",
+                source_id="gmail.list_drafts",
+                content_fields={"drafts": json.dumps(drafts, default=str)},
                 draft_count=len(drafts),
-                drafts=drafts,
             )
             return result
         except HttpError as e:
@@ -1166,10 +1173,12 @@ class GmailService(BaseService):
                     "snippet": snippet[:100] + "..." if len(snippet) > 100 else snippet,
                 })
 
-            output_success(
+            output_external_content(
                 operation="gmail.list_threads",
+                source_type="email",
+                source_id=f"gmail.list_threads:{query or 'all'}",
+                content_fields={"threads": json.dumps(threads, default=str)},
                 thread_count=len(threads),
-                threads=threads,
             )
             return {"threads": threads}
         except HttpError as e:
@@ -1214,11 +1223,13 @@ class GmailService(BaseService):
 
                 messages.append(msg_info)
 
-            output_success(
+            output_external_content(
                 operation="gmail.get_thread",
+                source_type="email",
+                source_id=f"gmail.thread:{thread_id}",
+                content_fields={"messages": json.dumps(messages, default=str)},
                 thread_id=thread_id,
                 message_count=len(messages),
-                messages=messages,
             )
             return {"thread_id": thread_id, "messages": messages}
         except HttpError as e:
@@ -1333,11 +1344,15 @@ class GmailService(BaseService):
                 .getVacation(userId="me")
             )
 
-            output_success(
+            output_external_content(
                 operation="gmail.get_vacation_settings",
+                source_type="email",
+                source_id="gmail.vacation_settings",
+                content_fields={
+                    "subject": settings.get("responseSubject", ""),
+                    "body_plain_text": settings.get("responseBodyPlainText", ""),
+                },
                 enabled=settings.get("enableAutoReply", False),
-                subject=settings.get("responseSubject", ""),
-                body_plain_text=settings.get("responseBodyPlainText", ""),
                 restrict_to_contacts=settings.get("restrictToContacts", False),
                 restrict_to_domain=settings.get("restrictToDomain", False),
                 start_time=settings.get("startTime"),
@@ -1432,11 +1447,15 @@ class GmailService(BaseService):
                 .get(userId="me", sendAsEmail=send_as_email)
             )
 
-            output_success(
+            output_external_content(
                 operation="gmail.get_signature",
+                source_type="email",
+                source_id=f"gmail.signature:{send_as_email}",
+                content_fields={
+                    "signature": result.get("signature", ""),
+                    "display_name": result.get("displayName", ""),
+                },
                 send_as_email=send_as_email,
-                signature=result.get("signature", ""),
-                display_name=result.get("displayName", ""),
                 is_primary=result.get("isPrimary", False),
             )
             return result

@@ -1,5 +1,6 @@
 """Google Drive service operations."""
 
+import json
 import mimetypes
 from pathlib import Path
 from typing import Any
@@ -9,7 +10,7 @@ from googleapiclient.errors import HttpError
 import io
 
 from gws.services.base import BaseService
-from gws.output import output_success, output_error
+from gws.output import output_success, output_error, output_external_content
 from gws.exceptions import ExitCode
 
 
@@ -237,12 +238,13 @@ class DriveService(BaseService):
 
             files = [self._file_to_dict(f) for f in result.get("files", [])]
 
-            output_success(
+            output_external_content(
                 operation="drive.list",
-                folder_id=folder_id,
-                files=files,
+                source_type="document",
+                source_id=f"drive.list:{folder_id or 'all'}",
+                content_fields={"files": json.dumps(files, default=str)},
+                file_count=len(files),
                 next_page_token=result.get("nextPageToken"),
-                count=len(files),
             )
             return result
         except HttpError as e:
@@ -278,12 +280,13 @@ class DriveService(BaseService):
 
             files = [self._file_to_dict(f) for f in result.get("files", [])]
 
-            output_success(
+            output_external_content(
                 operation="drive.search",
-                query=query,
-                files=files,
+                source_type="document",
+                source_id=f"drive.search:{query}",
+                content_fields={"files": json.dumps(files, default=str)},
+                file_count=len(files),
                 next_page_token=result.get("nextPageToken"),
-                count=len(files),
             )
             return result
         except HttpError as e:
@@ -328,7 +331,12 @@ class DriveService(BaseService):
             file_data["owners"] = owners
             file_data["permissions"] = permissions
 
-            output_success(operation="drive.get_metadata", file=file_data)
+            output_external_content(
+                operation="drive.get_metadata",
+                source_type="document",
+                source_id=f"drive.metadata:{file_id}",
+                content_fields={"file": json.dumps(file_data, default=str)},
+            )
             return file
         except HttpError as e:
             output_error(
@@ -649,11 +657,12 @@ class DriveService(BaseService):
                     "reply_count": len(comment.get("replies", [])),
                 })
 
-            output_success(
+            output_external_content(
                 operation="drive.list_comments",
-                file_id=file_id,
+                content_fields={"comments": json.dumps(comments, default=str)},
+                source_type="document",
+                source_id=f"drive.comments:{file_id}",
                 comment_count=len(comments),
-                comments=comments,
             )
             return {"comments": comments}
         except HttpError as e:
@@ -1300,12 +1309,12 @@ class DriveService(BaseService):
                     "modified_time": reply.get("modifiedTime"),
                 })
 
-            output_success(
+            output_external_content(
                 operation="drive.list_replies",
-                file_id=file_id,
-                comment_id=comment_id,
+                content_fields={"replies": json.dumps(replies, default=str)},
+                source_type="document",
+                source_id=f"drive.replies:{file_id}:{comment_id}",
                 reply_count=len(replies),
-                replies=replies,
             )
             return {"replies": replies}
         except HttpError as e:
@@ -1599,12 +1608,13 @@ class DriveService(BaseService):
                     }
                 changes.append(change_data)
 
-            output_success(
+            output_external_content(
                 operation="drive.list_changes",
+                content_fields={"changes": json.dumps(changes, default=str)},
+                source_type="document",
+                source_id=f"drive.changes:{page_token}",
                 change_count=len(changes),
-                next_page_token=result.get("nextPageToken"),
                 new_start_page_token=result.get("newStartPageToken"),
-                changes=changes,
             )
             return result
         except HttpError as e:

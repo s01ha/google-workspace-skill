@@ -4,6 +4,8 @@ import json
 import pytest
 from unittest.mock import MagicMock, patch
 
+from gws.config import Config
+
 
 # =============================================================================
 # TEST FIXTURES AND HELPERS
@@ -117,14 +119,19 @@ class TestBasicOperations:
         }
         docs_service.service.documents().get().execute.return_value = doc_data
 
-        docs_service.structure(document_id="doc-123")
+        config = Config()
+        config.security_enabled = False
+        with patch.object(Config, "load", return_value=config), \
+             patch("gws.context.get_active_account", return_value=None):
+            docs_service.structure(document_id="doc-123")
 
         output = json.loads(capsys.readouterr().out)
         assert output["status"] == "success"
-        assert len(output["headings"]) == 1
-        assert output["headings"][0]["text"] == "Chapter 1"
-        assert output["headings"][0]["style"] == "HEADING_1"
-        assert output["headings"][0]["level"] == 1
+        headings = json.loads(output["headings"])
+        assert len(headings) == 1
+        assert headings[0]["text"] == "Chapter 1"
+        assert headings[0]["style"] == "HEADING_1"
+        assert headings[0]["level"] == 1
 
     def test_insert_text(self, docs_service, capsys):
         """Test inserting text at index."""
@@ -813,12 +820,18 @@ class TestHeadersFooters:
             },
         })
 
-        docs_service.get_headers_footers(document_id="doc-123")
+        config = Config()
+        config.security_enabled = False
+        with patch.object(Config, "load", return_value=config), \
+             patch("gws.context.get_active_account", return_value=None):
+            docs_service.get_headers_footers(document_id="doc-123")
 
         output = json.loads(capsys.readouterr().out)
         assert output["status"] == "success"
-        assert len(output["headers"]) == 1
-        assert len(output["footers"]) == 1
+        headers = json.loads(output["headers"])
+        footers = json.loads(output["footers"])
+        assert len(headers) == 1
+        assert len(footers) == 1
 
     def test_insert_text_in_segment(self, docs_service, capsys):
         """Test inserting text into header/footer."""
@@ -1129,13 +1142,18 @@ class TestHelperMethods:
         }
         docs_service.service.documents().get.return_value.execute.return_value = doc_data
 
-        docs_service.structure(document_id="doc-123")
+        config = Config()
+        config.security_enabled = False
+        with patch.object(Config, "load", return_value=config), \
+             patch("gws.context.get_active_account", return_value=None):
+            docs_service.structure(document_id="doc-123")
 
         output = json.loads(capsys.readouterr().out)
         assert output["status"] == "success"
-        assert output["heading_count"] == 2
-        assert output["headings"][0]["level"] == 1
-        assert output["headings"][1]["level"] == 2
+        headings = json.loads(output["headings"])
+        assert len(headings) == 2
+        assert headings[0]["level"] == 1
+        assert headings[1]["level"] == 2
 
 
 # =============================================================================

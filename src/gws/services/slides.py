@@ -50,12 +50,16 @@ class SlidesService(BaseService):
                 for i, slide in enumerate(presentation.get("slides", []))
             ]
 
-            output_success(
+            output_external_content(
                 operation="slides.metadata",
+                source_type="slide",
+                source_id=presentation_id,
+                content_fields={
+                    "title": json.dumps(presentation.get("title", "")),
+                    "slides": json.dumps(slides),
+                },
                 presentation_id=presentation_id,
-                title=presentation.get("title", ""),
                 slide_count=len(slides),
-                slides=slides,
             )
             return presentation
         except HttpError as e:
@@ -2088,12 +2092,14 @@ class SlidesService(BaseService):
                                         notes_text += text_element["textRun"].get("content", "")
                     break
 
-            output_success(
+            output_external_content(
                 operation="slides.get_speaker_notes",
+                source_type="slide",
+                source_id=presentation_id,
+                content_fields={"notes_text": notes_text.strip()},
                 presentation_id=presentation_id,
                 slide_id=slide_id,
                 notes_page_id=notes_page_id,
-                notes_text=notes_text.strip(),
             )
             return {"notes_text": notes_text.strip(), "notes_page_id": notes_page_id}
         except HttpError as e:
