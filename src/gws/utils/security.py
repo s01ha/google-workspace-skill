@@ -11,6 +11,8 @@ from prompt_security import (
     screen_content,
     load_config,
     SecurityConfig,
+    wrap_external_data,
+    read_and_wrap_file,
 )
 
 __all__ = [
@@ -24,4 +26,6 @@ __all__ = [
     "screen_content",
     "load_config",
     "SecurityConfig",
+    "wrap_external_data",
+    "read_and_wrap_file",
 ]
