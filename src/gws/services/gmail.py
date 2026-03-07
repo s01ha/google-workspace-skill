@@ -13,7 +13,7 @@ from typing import Any
 from googleapiclient.errors import HttpError
 
 from gws.services.base import BaseService
-from gws.output import output_success, output_error, output_external_content
+from gws.output import output_success, output_error, output_external_content, screen_download
 from gws.exceptions import ExitCode
 
 
@@ -1095,6 +1095,7 @@ class GmailService(BaseService):
         message_id: str,
         attachment_id: str,
         output_path: str,
+        force: bool = False,
     ) -> dict[str, Any]:
         """Download an attachment to a file.
 
@@ -1102,6 +1103,7 @@ class GmailService(BaseService):
             message_id: The message ID containing the attachment.
             attachment_id: The attachment ID.
             output_path: Path to save the downloaded file.
+            force: If True, skip security screening.
         """
         try:
             attachment = self.execute(
@@ -1115,17 +1117,36 @@ class GmailService(BaseService):
             data = attachment.get("data", "")
             file_data = base64.urlsafe_b64decode(data)
 
+            # Screen content before writing to disk
+            verdict = screen_download(
+                file_data, "gmail.download_attachment", "email",
+                f"gmail.attachment:{message_id}:{attachment_id}", force=force,
+            )
+            if not verdict.allowed:
+                output_error(
+                    error_code="SECURITY_BLOCKED",
+                    operation="gmail.download_attachment",
+                    message="Attachment blocked by security screening. Use --force to bypass.",
+                    details={"warnings": verdict.warnings},
+                )
+                raise SystemExit(ExitCode.API_ERROR)
+
             # Write to file
             with open(output_path, "wb") as f:
                 f.write(file_data)
 
-            output_success(
-                operation="gmail.download_attachment",
-                message_id=message_id,
-                attachment_id=attachment_id,
-                output_path=output_path,
-                size=len(file_data),
-            )
+            response_kwargs: dict[str, Any] = {
+                "operation": "gmail.download_attachment",
+                "message_id": message_id,
+                "attachment_id": attachment_id,
+                "output_path": output_path,
+                "size": len(file_data),
+            }
+            if verdict.is_binary and verdict.advisory:
+                response_kwargs["security_advisory"] = verdict.advisory
+            if verdict.warnings:
+                response_kwargs["security_warnings"] = verdict.warnings
+            output_success(**response_kwargs)
             return {"output_path": output_path, "size": len(file_data)}
         except HttpError as e:
             output_error(

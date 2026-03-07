@@ -471,6 +471,10 @@ def download_attachment(
     message_id: Annotated[str, typer.Argument(help="Message ID containing the attachment.")],
     attachment_id: Annotated[str, typer.Argument(help="Attachment ID.")],
     output_path: Annotated[str, typer.Argument(help="Path to save the downloaded file.")],
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Skip security screening of downloaded content."),
+    ] = False,
 ) -> None:
     """Download an attachment to a file."""
     service = GmailService()
@@ -478,6 +482,7 @@ def download_attachment(
         message_id=message_id,
         attachment_id=attachment_id,
         output_path=output_path,
+        force=force,
     )
 
 
