@@ -109,6 +109,10 @@ def export_document(
         str,
         typer.Option("--format", "-f", help="Export format: markdown, pdf, docx, txt, html, rtf, epub, odt."),
     ] = "markdown",
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Skip security screening of exported content."),
+    ] = False,
 ) -> None:
     """Export a document to markdown, PDF, DOCX, or other formats.
 
@@ -121,7 +125,7 @@ def export_document(
         gws-cli docs export DOC_ID report.docx --format docx
     """
     service = DocsService()
-    service.export(document_id=document_id, output_path=output_path, fmt=fmt)
+    service.export(document_id=document_id, output_path=output_path, fmt=fmt, force=force)
 
 
 @app.command("create")

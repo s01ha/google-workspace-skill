@@ -9,7 +9,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
 from gws.services.base import BaseService
-from gws.output import output_success, output_error, output_external_content
+from gws.output import output_success, output_error, output_external_content, screen_download
 from gws.exceptions import ExitCode
 
 
@@ -3691,6 +3691,7 @@ class DocsService(BaseService):
         document_id: str,
         output_path: str,
         fmt: str = "markdown",
+        force: bool = False,
     ) -> dict[str, Any]:
         """Export a Google Doc to a file.
 
@@ -3699,6 +3700,7 @@ class DocsService(BaseService):
             output_path: Local path to save the exported file.
             fmt: Export format name (markdown, pdf, docx, txt, html, rtf, epub, odt)
                  or a raw MIME type.
+            force: Skip security screening of exported content.
         """
         # Resolve format name to MIME type
         mime_type = self.EXPORT_FORMATS.get(fmt.lower(), fmt)
@@ -3714,15 +3716,35 @@ class DocsService(BaseService):
             while not done:
                 _, done = downloader.next_chunk()
 
-            Path(output_path).write_bytes(fh.getvalue())
+            raw_bytes = fh.getvalue()
 
-            output_success(
-                operation="docs.export",
-                document_id=document_id,
-                output_path=output_path,
-                format=fmt,
-                mime_type=mime_type,
+            # Screen content before writing to disk
+            verdict = screen_download(
+                raw_bytes, "docs.export", "document", document_id, force=force,
             )
+            if not verdict.allowed:
+                output_error(
+                    error_code="SECURITY_BLOCKED",
+                    operation="docs.export",
+                    message="Exported content blocked by security screening. Use --force to bypass.",
+                    details={"warnings": verdict.warnings},
+                )
+                raise SystemExit(ExitCode.API_ERROR)
+
+            Path(output_path).write_bytes(raw_bytes)
+
+            response_kwargs: dict[str, Any] = {
+                "operation": "docs.export",
+                "document_id": document_id,
+                "output_path": output_path,
+                "format": fmt,
+                "mime_type": mime_type,
+            }
+            if verdict.is_binary and verdict.advisory:
+                response_kwargs["security_advisory"] = verdict.advisory
+            if verdict.warnings:
+                response_kwargs["security_warnings"] = verdict.warnings
+            output_success(**response_kwargs)
             return {"document_id": document_id, "output_path": output_path}
         except HttpError as e:
             output_error(
