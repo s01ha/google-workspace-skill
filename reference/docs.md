@@ -63,7 +63,7 @@ uvx gws-cli docs insert-image <document_id> "https://example.com/image.png" --wi
 Export a Google Doc to various file formats. The default format is markdown.
 
 ```bash
-# Export as Markdown (default)
+# Export as Markdown (default; --force to skip prompt-injection screening)
 uvx gws-cli docs export <document_id> report.md
 
 # Export as PDF
@@ -89,6 +89,9 @@ uvx gws-cli docs export <document_id> report.odt --format odt
 
 # You can also pass a raw MIME type
 uvx gws-cli docs export <document_id> output.zip --format "application/zip"
+
+# Bypass prompt-injection screening
+uvx gws-cli docs export <document_id> report.md --force
 ```
 
 **Supported formats:**

@@ -24,8 +24,9 @@ uvx gws-cli drive search "name contains 'report'"
 # Get file metadata
 uvx gws-cli drive get <file_id>
 
-# Download file
+# Download file (--force to skip prompt-injection screening)
 uvx gws-cli drive download <file_id> /path/to/output.pdf
+uvx gws-cli drive download <file_id> /path/to/output.pdf --force
 
 # Upload file
 uvx gws-cli drive upload /path/to/file.pdf --folder <folder_id>
@@ -50,10 +51,11 @@ uvx gws-cli drive update <file_id> /path/to/new-content.pdf
 # Delete file (moves to trash)
 uvx gws-cli drive delete <file_id>
 
-# Export Google file format (pass MIME type via --format)
+# Export Google file format (pass MIME type via --format; --force to skip screening)
 uvx gws-cli drive export <file_id> /path/to/output.pdf
 uvx gws-cli drive export <file_id> output.docx --format "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 uvx gws-cli drive export <file_id> output.md --format "text/markdown"
+uvx gws-cli drive export <file_id> output.pdf --force
 ```
 
 **Tip**: For exporting Google Docs specifically, use `gws-cli docs export` which accepts friendly format names (`markdown`, `pdf`, `docx`, etc.) instead of raw MIME types.

@@ -169,8 +169,9 @@ uvx gws-cli gmail send-with-attachment "recipient@example.com" "Subject" "Body" 
 # List attachments in a message
 uvx gws-cli gmail list-attachments <message_id>
 
-# Download an attachment
+# Download an attachment (--force to skip prompt-injection screening)
 uvx gws-cli gmail download-attachment <message_id> <attachment_id> /path/to/output.pdf
+uvx gws-cli gmail download-attachment <message_id> <attachment_id> /path/to/output.pdf --force
 ```
 
 ## Threads

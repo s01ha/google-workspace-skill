@@ -180,6 +180,8 @@ Configuration uses a two-tier model:
 
 See the [prompt-security-utils documentation](https://github.com/andmarios/prompt-security-utils) for the full security configuration reference.
 
+Download and export operations (`drive download`, `drive export`, `gmail download-attachment`, `docs export`) screen content for prompt injection before writing files to disk. If suspicious content is detected (high-severity patterns, semantic similarity, or LLM screening), the file is **not saved** and an error is returned. Use `--force` to bypass screening. Binary files that cannot be screened include an advisory to check extracted text with `uvx prompt-security-utils <file>`.
+
 ## Credential Storage
 
 All credentials and configuration are stored in `~/.config/gws-cli/`:
