@@ -10,7 +10,7 @@ from googleapiclient.errors import HttpError
 import io
 
 from gws.services.base import BaseService
-from gws.output import output_success, output_error, output_external_content
+from gws.output import output_success, output_error, output_external_content, screen_download
 from gws.exceptions import ExitCode
 
 
@@ -133,7 +133,7 @@ class DriveService(BaseService):
             )
             raise SystemExit(ExitCode.API_ERROR)
 
-    def download(self, file_id: str, output_path: str) -> dict[str, Any]:
+    def download(self, file_id: str, output_path: str, force: bool = False) -> dict[str, Any]:
         """Download a file from Google Drive."""
         try:
             # Get file metadata first
@@ -147,6 +147,7 @@ class DriveService(BaseService):
                     file_id=file_id,
                     output_path=output_path,
                     export_mime_type=self.EXPORT_FORMATS.get(file["mimeType"], "application/pdf"),
+                    force=force,
                 )
 
             # Regular file download
@@ -158,16 +159,34 @@ class DriveService(BaseService):
             while not done:
                 _, done = downloader.next_chunk()
 
-            # Write to file
-            Path(output_path).write_bytes(fh.getvalue())
+            raw_bytes = fh.getvalue()
 
-            output_success(
-                operation="drive.download",
-                file_id=file_id,
-                output_path=output_path,
-                name=file.get("name"),
-                mime_type=file.get("mimeType"),
-            )
+            # Screen content before writing to disk
+            verdict = screen_download(raw_bytes, "drive.download", "document", file_id, force=force)
+            if not verdict.allowed:
+                output_error(
+                    error_code="SECURITY_BLOCKED",
+                    operation="drive.download",
+                    message="Downloaded content blocked by security screening. Use --force to bypass.",
+                    details={"warnings": verdict.warnings},
+                )
+                raise SystemExit(ExitCode.API_ERROR)
+
+            # Write to file
+            Path(output_path).write_bytes(raw_bytes)
+
+            response_kwargs: dict[str, Any] = {
+                "operation": "drive.download",
+                "file_id": file_id,
+                "output_path": output_path,
+                "name": file.get("name"),
+                "mime_type": file.get("mimeType"),
+            }
+            if verdict.is_binary and verdict.advisory:
+                response_kwargs["security_advisory"] = verdict.advisory
+            if verdict.warnings:
+                response_kwargs["security_warnings"] = verdict.warnings
+            output_success(**response_kwargs)
             return {"file_id": file_id, "output_path": output_path}
         except HttpError as e:
             output_error(
@@ -182,6 +201,7 @@ class DriveService(BaseService):
         file_id: str,
         output_path: str,
         export_mime_type: str = "application/pdf",
+        force: bool = False,
     ) -> dict[str, Any]:
         """Export a Google native file (Docs, Sheets, Slides) to a different format."""
         try:
@@ -195,14 +215,32 @@ class DriveService(BaseService):
             while not done:
                 _, done = downloader.next_chunk()
 
-            Path(output_path).write_bytes(fh.getvalue())
+            raw_bytes = fh.getvalue()
 
-            output_success(
-                operation="drive.export",
-                file_id=file_id,
-                output_path=output_path,
-                export_mime_type=export_mime_type,
-            )
+            # Screen content before writing to disk
+            verdict = screen_download(raw_bytes, "drive.export", "document", file_id, force=force)
+            if not verdict.allowed:
+                output_error(
+                    error_code="SECURITY_BLOCKED",
+                    operation="drive.export",
+                    message="Exported content blocked by security screening. Use --force to bypass.",
+                    details={"warnings": verdict.warnings},
+                )
+                raise SystemExit(ExitCode.API_ERROR)
+
+            Path(output_path).write_bytes(raw_bytes)
+
+            response_kwargs: dict[str, Any] = {
+                "operation": "drive.export",
+                "file_id": file_id,
+                "output_path": output_path,
+                "export_mime_type": export_mime_type,
+            }
+            if verdict.is_binary and verdict.advisory:
+                response_kwargs["security_advisory"] = verdict.advisory
+            if verdict.warnings:
+                response_kwargs["security_warnings"] = verdict.warnings
+            output_success(**response_kwargs)
             return {"file_id": file_id, "output_path": output_path}
         except HttpError as e:
             output_error(

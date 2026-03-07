@@ -92,10 +92,14 @@ def upload_file(
 def download_file(
     file_id: Annotated[str, typer.Argument(help="File ID to download.")],
     output_path: Annotated[str, typer.Argument(help="Local path to save the file.")],
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Skip security screening of downloaded content."),
+    ] = False,
 ) -> None:
     """Download a file from Google Drive."""
     service = DriveService()
-    service.download(file_id=file_id, output_path=output_path)
+    service.download(file_id=file_id, output_path=output_path, force=force)
 
 
 @app.command("export")
@@ -106,10 +110,14 @@ def export_file(
         str,
         typer.Option("--format", "-f", help="Export MIME type (e.g., application/pdf)."),
     ] = "application/pdf",
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Skip security screening of exported content."),
+    ] = False,
 ) -> None:
     """Export a Google native file (Docs, Sheets, Slides) to another format."""
     service = DriveService()
-    service.export(file_id=file_id, output_path=output_path, export_mime_type=mime_type)
+    service.export(file_id=file_id, output_path=output_path, export_mime_type=mime_type, force=force)
 
 
 @app.command("create-folder")
