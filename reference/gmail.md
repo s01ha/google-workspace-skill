@@ -13,6 +13,8 @@
 
 ## Basic Operations
 
+> **`--max` guideline:** Default is 10. Values up to 500 work (batched internally in groups of 100), but prefer ≤50 to avoid rate-limiting. Start small and paginate with `--query` filters rather than fetching hundreds at once.
+
 ```bash
 # List recent messages
 uvx gws-cli gmail list --max 10

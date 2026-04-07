@@ -16,6 +16,10 @@ from gws.services.base import BaseService
 from gws.output import output_success, output_error, output_external_content, screen_download
 from gws.exceptions import ExitCode
 
+# Gmail batch HTTP requests are limited to 100 individual requests per batch.
+# https://developers.google.com/workspace/gmail/api/guides/batch
+_BATCH_LIMIT = 100
+
 
 class GmailService(BaseService):
     """Google Gmail operations."""
@@ -48,7 +52,8 @@ class GmailService(BaseService):
             msg_refs = result.get("messages", [])
 
             if msg_refs:
-                # Use batch request to fetch all messages in one round-trip
+                # Use batch requests to fetch messages (chunked to stay within
+                # Gmail's 100-requests-per-batch limit)
                 batch_results: dict[str, Any] = {}
 
                 def handle_response(request_id: str, response: Any, exception: Any) -> None:
@@ -57,20 +62,22 @@ class GmailService(BaseService):
                     else:
                         batch_errors[request_id] = str(exception)
 
-                batch = self.service.new_batch_http_request(callback=handle_response)
-                for msg_ref in msg_refs:
-                    batch.add(
-                        self.service.users()
-                        .messages()
-                        .get(
-                            userId="me",
-                            id=msg_ref["id"],
-                            format="metadata",
-                            metadataHeaders=["From", "To", "Subject", "Date"],
-                        ),
-                        request_id=msg_ref["id"],
-                    )
-                batch.execute()
+                for i in range(0, len(msg_refs), _BATCH_LIMIT):
+                    chunk = msg_refs[i : i + _BATCH_LIMIT]
+                    batch = self.service.new_batch_http_request(callback=handle_response)
+                    for msg_ref in chunk:
+                        batch.add(
+                            self.service.users()
+                            .messages()
+                            .get(
+                                userId="me",
+                                id=msg_ref["id"],
+                                format="metadata",
+                                metadataHeaders=["From", "To", "Subject", "Date"],
+                            ),
+                            request_id=msg_ref["id"],
+                        )
+                    batch.execute()
 
                 # Process batch results in original order
                 for msg_ref in msg_refs:
@@ -669,15 +676,17 @@ class GmailService(BaseService):
                     if exception is None:
                         batch_results[request_id] = response
 
-                batch = self.service.new_batch_http_request(callback=handle_draft_response)
-                for draft_ref in draft_refs:
-                    batch.add(
-                        self.service.users()
-                        .drafts()
-                        .get(userId="me", id=draft_ref["id"], format="metadata"),
-                        request_id=draft_ref["id"],
-                    )
-                batch.execute()
+                for i in range(0, len(draft_refs), _BATCH_LIMIT):
+                    chunk = draft_refs[i : i + _BATCH_LIMIT]
+                    batch = self.service.new_batch_http_request(callback=handle_draft_response)
+                    for draft_ref in chunk:
+                        batch.add(
+                            self.service.users()
+                            .drafts()
+                            .get(userId="me", id=draft_ref["id"], format="metadata"),
+                            request_id=draft_ref["id"],
+                        )
+                    batch.execute()
 
                 for draft_ref in draft_refs:
                     draft = batch_results.get(draft_ref["id"])

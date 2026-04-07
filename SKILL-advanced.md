@@ -396,9 +396,9 @@ uvx gws-cli drive search "name contains 'report'"
 3. **Concurrent request limit**: Too many parallel requests
 
 ```bash
-# For bulk email operations, process in batches of 50
-# The gws CLI handles batching internally for list operations
-uvx gws-cli gmail list --max 100  # Internally batched
+# The CLI automatically chunks batch requests into groups of 100.
+# Values up to 500 work, but prefer ≤50 to avoid rate-limiting.
+uvx gws-cli gmail list --max 50
 ```
 
 ### Google Calendar: Event ID Strategy
