@@ -233,3 +233,17 @@ def test_delete_encrypted_only_plaintext(tmp_path):
 
     assert delete_encrypted(base) is True
     assert not base.exists()
+
+
+def test_save_encrypted_plaintext_refuses_symlink(tmp_path):
+    """A symlink planted at the token path must not be followed (O_NOFOLLOW)."""
+    import pytest
+    from gws.crypto import save_encrypted
+
+    decoy = tmp_path / "decoy"
+    decoy.write_text("old")
+    target = tmp_path / "token.json"
+    target.symlink_to(decoy)
+
+    with pytest.raises(OSError):
+        save_encrypted(target, {"a": 1}, key=None)

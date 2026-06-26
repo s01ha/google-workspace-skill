@@ -77,7 +77,10 @@ def resolve_auth_provider(
     from gws.config import Config
 
     cfg = config or Config.load()
-    resolved_account = account or cfg.resolve_account()
+    # Route the explicit account through resolve_account() too, so an invalid
+    # name raises the caught AuthError (clean exit) instead of a later raw
+    # ValueError from get_account_dir().
+    resolved_account = cfg.resolve_account(account)
 
     # Apply per-account overrides (mode, server_url, server_provider, etc.)
     effective = cfg.load_effective_config(resolved_account)

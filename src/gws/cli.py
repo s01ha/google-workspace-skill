@@ -46,7 +46,14 @@ def main(
 
 
 # ── Auth command group ─────────────────────────────────────────────────
-auth_app = typer.Typer(help="Authentication management.")
+auth_app = typer.Typer(
+    help=(
+        "Authentication management. Running 'gws-cli auth' with no subcommand "
+        "logs you in using the configured mode: local OAuth (default) or the "
+        "server relay. Run 'gws-cli auth status' to see the current mode, or "
+        "'gws-cli config set-mode local|server' to change it."
+    )
+)
 app.add_typer(auth_app, name="auth")
 
 
@@ -66,6 +73,9 @@ def auth_default(
     if ctx.invoked_subcommand is not None:
         return
 
+    # Note: this bare `auth` command logs in using the configured mode
+    # (local OAuth or server relay), resolved per-account by
+    # resolve_auth_provider(). See `auth status` to inspect the active mode.
     try:
         provider = resolve_auth_provider(account=account)
 
@@ -113,6 +123,20 @@ def auth_status(
     """Check authentication status (non-interactive)."""
     provider = resolve_auth_provider(account=account)
 
+    # Resolve the effective auth mode so it is always visible in the output
+    # (this is the question 'will auth go local or relay?' — see #UX).
+    config = Config.load()
+    resolved = config.resolve_account(account)
+    effective = config.load_effective_config(resolved)
+
+    auth_info: dict[str, Any] = {"mode": effective.mode}
+    if effective.mode == "server":
+        server_url = os.environ.get("GWS_SERVER_URL") or effective.server_url
+        if server_url:
+            auth_info["server_url"] = server_url
+        if effective.server_provider:
+            auth_info["provider"] = effective.server_provider
+
     is_valid, status_msg, credentials = provider.check_credentials()
 
     if is_valid:
@@ -123,16 +147,24 @@ def auth_status(
         result["token_path"] = str(provider.TOKEN_PATH)
         if provider.account_name:
             result["account"] = provider.account_name
+        result.update(auth_info)
         output_json(result)
     else:
+        hint = "Run 'gws-cli auth' to authenticate."
+        if effective.mode == "server":
+            hint = (
+                "Run 'gws-cli auth' (server mode) or 'gws-cli auth server-login' "
+                "to authenticate."
+            )
         result = {
             "status": "not_authenticated",
             "message": f"Authentication required: {status_msg}",
-            "hint": "Run 'gws-cli auth' to authenticate.",
+            "hint": hint,
         }
         result["token_path"] = str(provider.TOKEN_PATH)
         if provider.account_name:
             result["account"] = provider.account_name
+        result.update(auth_info)
         output_json(result)
         raise typer.Exit(ExitCode.AUTH_ERROR)
 
@@ -1081,10 +1113,19 @@ def config_set_mode(
         token_path = config.get_account_dir(account) / "token.json"
         token_cleared = delete_encrypted(token_path)
     else:
-        # Global config
+        # Global config. Mirror the per-account branch: only overwrite
+        # server_url/provider when explicitly provided, and clear them only
+        # when switching to local. Switching to server without --url inherits
+        # the existing global values rather than wiping them.
         config.mode = mode
-        config.server_url = url.rstrip("/") if url else None
-        config.server_provider = provider
+        if url:
+            config.server_url = url.rstrip("/")
+        elif mode == "local":
+            config.server_url = None
+        if provider is not None:
+            config.server_provider = provider
+        elif mode == "local":
+            config.server_provider = None
         config.save()
         token_cleared = False
 
@@ -1096,12 +1137,18 @@ def config_set_mode(
     if account:
         result["account"] = account
         result["scope"] = "per-account"
+        eff_url = overrides.get("server_url") or config.server_url
+        eff_provider = overrides.get("server_provider") or config.server_provider
     else:
         result["scope"] = "global"
-    if url:
-        result["server_url"] = url.rstrip("/") if url else None
-    if provider:
-        result["server_provider"] = provider
+        eff_url = config.server_url
+        eff_provider = config.server_provider
+    # Surface the *effective* server URL/provider in server mode, including
+    # values inherited from the global config when --url was omitted.
+    if mode == "server" and eff_url:
+        result["server_url"] = eff_url
+    if mode == "server" and eff_provider:
+        result["server_provider"] = eff_provider
     if token_cleared:
         result["note"] = "Token cleared — next API call will re-authenticate via the new mode."
     output_success(**result)

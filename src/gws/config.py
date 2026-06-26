@@ -5,16 +5,35 @@ import json
 import os
 import re
 import shutil
+import tempfile
 from dataclasses import dataclass, field, asdict, fields
 from pathlib import Path
 from typing import Any, ClassVar
 
 def _write_secure_file(path: Path, content: str) -> None:
-    """Write content to path with 0o600 permissions (owner read/write only)."""
+    """Atomically write content to path with 0o600 permissions (owner only).
+
+    Writes to a temp file in the same directory, fsyncs, then os.replace()s it
+    into place. A crash or error mid-write can therefore never leave a
+    truncated/corrupt file at ``path`` — readers see either the old contents or
+    the fully-written new contents, never a partial write.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(content)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, str(path))
+    except BaseException:
+        # Never leave the temp file behind on failure.
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # Account names must be alphanumeric, hyphens, or underscores
@@ -145,9 +164,34 @@ class Config:
                 return cls._from_dict(data)
             except (json.JSONDecodeError, TypeError) as e:
                 import sys
-                print(f"[gws-cli] Warning: corrupt config file, using defaults: {e}", file=sys.stderr)
+                # Preserve the corrupt file before falling back to defaults, so a
+                # subsequent save() can never permanently overwrite (and drop) the
+                # accounts registry. The data remains recoverable from the backup.
+                backup = cls._backup_corrupt_config()
+                print(
+                    f"[gws-cli] ERROR: config file was corrupt ({e}). It has been "
+                    f"moved to {backup}. Continuing with defaults — restore from the "
+                    f"backup to recover your accounts and settings.",
+                    file=sys.stderr,
+                )
                 return cls()
         return cls()
+
+    @classmethod
+    def _backup_corrupt_config(cls) -> Path:
+        """Move the corrupt config file aside to a unique, non-clobbering path."""
+        base = cls.CONFIG_PATH
+        candidate = base.with_name(f"{base.name}.corrupt-{os.getpid()}")
+        counter = 0
+        while candidate.exists():
+            counter += 1
+            candidate = base.with_name(f"{base.name}.corrupt-{os.getpid()}-{counter}")
+        try:
+            os.replace(str(base), str(candidate))
+        except OSError:
+            # Best effort: copy the bytes if the rename fails for any reason.
+            candidate.write_bytes(base.read_bytes())
+        return candidate
 
     @classmethod
     def _from_dict(cls, data: dict[str, Any]) -> "Config":
@@ -171,6 +215,12 @@ class Config:
 
     def save(self) -> None:
         """Save configuration to file."""
+        if getattr(self, "_is_effective", False):
+            raise RuntimeError(
+                "Refusing to persist an effective (per-account override) config to "
+                "the global config file. Load a fresh base config via Config.load() "
+                "and modify that instead."
+            )
         self.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         data = asdict(self)
         # Omit defaults for clean JSON
@@ -199,7 +249,7 @@ class Config:
         if self._encryption_key_resolved:
             return self._encryption_key_cache
 
-        from gws.crypto import derive_key, generate_salt
+        from gws.crypto import derive_key
 
         if os.environ.get("GWS_ENCRYPTION", "").lower() == "none":
             self._encryption_key_cache = None
@@ -207,16 +257,28 @@ class Config:
             return None
 
         if not self.encryption_salt:
-            self.encryption_salt = generate_salt()
-            self.save()
+            # Persist the new salt on the base global config, never on `self`
+            # (which may be a per-account effective copy — see save() guard).
+            self.encryption_salt = self._ensure_salt_persisted()
 
         self._encryption_key_cache = derive_key(self.encryption_salt, "gws-cli")
         self._encryption_key_resolved = True
         return self._encryption_key_cache
 
-    def is_service_enabled(self, service: str) -> bool:
-        """Check if a service is enabled."""
-        return service in self.enabled_services
+    def _ensure_salt_persisted(self) -> str:
+        """Generate (if needed) and persist the encryption salt on the base config.
+
+        Loads a fresh base ``Config`` from disk so that lazily generating the salt
+        during key derivation can never write a per-account effective config's
+        overrides into the global file.
+        """
+        from gws.crypto import generate_salt
+
+        base = Config.load()
+        if not base.encryption_salt:
+            base.encryption_salt = generate_salt()
+            base.save()
+        return base.encryption_salt
 
     def enable_service(self, service: str) -> bool:
         """Enable a service. Returns True if changed."""
@@ -266,16 +328,32 @@ class Config:
     @staticmethod
     def validate_account_name(name: str) -> None:
         """Validate account name is safe for filesystem use."""
-        if not _VALID_ACCOUNT_NAME.match(name):
+        # fullmatch (not match) so a trailing newline can't slip past the `$`
+        # anchor; also bound the length to keep on-disk paths sane.
+        if not name or len(name) > 64 or not _VALID_ACCOUNT_NAME.fullmatch(name):
             raise ValueError(
-                f"Invalid account name '{name}'. "
-                "Use only letters, numbers, hyphens, and underscores."
+                f"Invalid account name '{name}'. Use only letters, numbers, "
+                "hyphens, and underscores (max 64 characters)."
             )
 
     def get_account_dir(self, name: str) -> Path:
         """Get the directory for a named account."""
         self.validate_account_name(name)
         return self.BASE_DIR / "accounts" / name
+
+    def _make_account_dir(self, name: str) -> Path:
+        """Create (if needed) the account directory with private 0o700 perms.
+
+        Account directories hold OAuth tokens, so they must not be world- or
+        group-readable. chmod after mkdir to defeat a permissive umask.
+        """
+        account_dir = self.get_account_dir(name)
+        account_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(account_dir, 0o700)
+        except OSError:
+            pass
+        return account_dir
 
     def resolve_account(self, account: str | None = None) -> str | None:
         """Resolve which account to use.
@@ -311,6 +389,9 @@ class Config:
         if not overrides:
             return self
         effective = copy.deepcopy(self)
+        # Mark this as a derived copy so it can never be persisted to the global
+        # config file (guarded in save()).
+        effective._is_effective = True
         # Overlay supported fields
         if "enabled_services" in overrides:
             effective.enabled_services = overrides["enabled_services"]
@@ -349,9 +430,8 @@ class Config:
         if not self.accounts.default_account:
             self.accounts.default_account = name
 
-        # Create account directory
-        account_dir = self.get_account_dir(name)
-        account_dir.mkdir(parents=True, exist_ok=True)
+        # Create account directory (private perms — holds tokens)
+        self._make_account_dir(name)
 
         self.save()
 
@@ -395,12 +475,20 @@ class Config:
             return {}
         result = {}
         for name, entry in self.accounts.entries.items():
-            result[name] = {
+            overrides = self.load_account_config(name)
+            mode = overrides.get("mode", self.mode)
+            info: dict[str, Any] = {
                 "name": entry.name,
                 "email": entry.email,
                 "created_at": entry.created_at,
                 "is_default": name == self.accounts.default_account,
+                "mode": mode,
             }
+            if mode == "server":
+                server_url = overrides.get("server_url") or self.server_url
+                if server_url:
+                    info["server_url"] = server_url
+            result[name] = info
         return result
 
     def get_account_display_name(self, account: str | None) -> str:
@@ -428,8 +516,7 @@ class Config:
 
     def save_account_config(self, name: str, overrides: dict[str, Any]) -> None:
         """Save per-account config overrides."""
-        account_dir = self.get_account_dir(name)
-        account_dir.mkdir(parents=True, exist_ok=True)
+        account_dir = self._make_account_dir(name)
         config_path = account_dir / "config.json"
         _write_secure_file(config_path, json.dumps(overrides, indent=2))
 

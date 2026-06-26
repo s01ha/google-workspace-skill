@@ -170,8 +170,42 @@ class LocalAuthProvider:
             save_encrypted(self.TOKEN_PATH, data, self.config.get_encryption_key())
 
     def delete_token(self) -> bool:
-        """Delete the token file (encrypted and/or plaintext)."""
+        """Delete the token file (encrypted and/or plaintext).
+
+        Best-effort revokes the token upstream at Google first, so that logging
+        out actually invalidates access rather than only removing the local
+        copy. A failed revoke never blocks the local deletion.
+        """
+        self._revoke_token_best_effort()
         return delete_encrypted(self.TOKEN_PATH)
+
+    def _revoke_token_best_effort(self) -> None:
+        """Revoke the stored Google token at Google's revoke endpoint.
+
+        Never raises — logout must succeed even if the network call fails.
+        """
+        try:
+            token_data = load_encrypted(self.TOKEN_PATH, self.config.get_encryption_key())
+        except Exception:
+            return
+        if not token_data:
+            return
+        # Revoking a refresh token invalidates the whole grant; fall back to the
+        # access token if that is all we have.
+        token = token_data.get("refresh_token") or token_data.get("token")
+        if not token:
+            return
+        try:
+            import httpx
+
+            httpx.post(
+                "https://oauth2.googleapis.com/revoke",
+                data={"token": token},
+                timeout=5.0,
+            )
+        except Exception:
+            # Best-effort only — a revoke failure must not break logout.
+            pass
 
     def check_credentials(self) -> tuple[bool, str, Credentials | None]:
         """Check credentials without triggering auth flow.

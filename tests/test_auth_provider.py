@@ -103,3 +103,34 @@ class TestResolveAuthProvider:
             mock_server.assert_called_once()
             call_kwargs = mock_server.call_args
             assert "account-relay.example.com" in str(call_kwargs)
+
+
+def test_local_logout_revokes_upstream_best_effort(tmp_path, monkeypatch):
+    """Logging out locally should best-effort revoke the Google token, then
+    still delete the local token file."""
+    monkeypatch.setenv("GWS_ENCRYPTION", "none")
+    monkeypatch.setattr(Config, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(Config, "CONFIG_PATH", tmp_path / "gws_config.json")
+
+    from gws.auth.oauth import LocalAuthProvider
+    from gws.crypto import save_encrypted
+
+    provider = LocalAuthProvider(config=Config.load(), account=None)
+    save_encrypted(provider.TOKEN_PATH, {"refresh_token": "RT", "token": "AT"}, None)
+
+    calls = []
+
+    class _Resp:
+        status_code = 200
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return _Resp()
+
+    monkeypatch.setattr("httpx.post", fake_post)
+
+    assert provider.delete_token() is True
+    assert not provider.TOKEN_PATH.exists()  # local file still removed
+    assert calls, "expected an upstream revoke call"
+    assert "oauth2.googleapis.com/revoke" in calls[0][0]
+    assert calls[0][1]["data"]["token"] == "RT"

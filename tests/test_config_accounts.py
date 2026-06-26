@@ -313,3 +313,100 @@ class TestAccountNameValidation:
     def test_dots_rejected(self):
         with pytest.raises(ValueError, match="Invalid account name"):
             Config.validate_account_name("..")
+
+
+class TestEffectiveConfigDoesNotLeak:
+    """H2: deriving the key (or any save) on a per-account effective config
+    must never write per-account overrides back to the global config."""
+
+    def test_key_derivation_on_effective_config_does_not_clobber_global(
+        self, config_dir, monkeypatch
+    ):
+        # Avoid machine-id dependency for key derivation.
+        monkeypatch.setattr("gws.crypto.derive_key", lambda salt, info: b"k" * 44)
+
+        base = Config()
+        base.add_account("work")
+        base.save()
+        base.save_account_config("work", {"enabled_services": ["docs"]})
+
+        effective = Config.load().load_effective_config("work")
+        assert effective.enabled_services == ["docs"]
+        assert effective.encryption_salt == ""  # empty salt triggers the persist path
+
+        effective.get_encryption_key()
+
+        on_disk = Config.load()
+        # Global enabled_services must be untouched by the per-account override.
+        assert on_disk.enabled_services == list(Config.ALL_SERVICES)
+        # The salt must still have been persisted to the global config.
+        assert on_disk.encryption_salt
+
+    def test_effective_config_save_is_rejected(self, config_dir):
+        base = Config()
+        base.add_account("work")
+        base.save()
+        base.save_account_config("work", {"enabled_services": ["docs"]})
+
+        effective = Config.load().load_effective_config("work")
+        with pytest.raises(RuntimeError):
+            effective.save()
+
+
+class TestAtomicAndCorruptConfig:
+    """H3: atomic writes + corrupt-config preservation."""
+
+    def test_write_failure_preserves_existing_file(self, config_dir, monkeypatch):
+        import os as _os
+        from gws.config import _write_secure_file
+
+        path = config_dir / "gws_config.json"
+        _write_secure_file(path, '{"original": true}')
+
+        def boom(*args, **kwargs):
+            raise OSError("simulated replace failure")
+
+        monkeypatch.setattr(_os, "replace", boom)
+        with pytest.raises(OSError):
+            _write_secure_file(path, '{"new": true}')
+
+        # The pre-existing file must be intact (atomic write never truncates it)
+        assert path.read_text() == '{"original": true}'
+        # No temp/partial files left behind
+        leftovers = [p for p in config_dir.iterdir() if ".tmp" in p.name]
+        assert not leftovers
+
+    def test_corrupt_config_is_backed_up_not_silently_destroyed(self, config_dir):
+        # A config that contains account data but is syntactically broken
+        Config.CONFIG_PATH.write_text('{"accounts": {"entries": {"work": {')
+
+        cfg = Config.load()  # must not raise, must not silently drop the data
+
+        backups = list(config_dir.glob("gws_config.json.corrupt*"))
+        assert backups, "corrupt config must be preserved as a backup"
+        assert "work" in backups[0].read_text(), "backup must retain original bytes"
+
+
+class TestAccountNameHardening:
+    """Security: account name validation must be airtight."""
+
+    def test_trailing_newline_rejected(self):
+        # re.match + '$' accepts a trailing newline; fullmatch must not.
+        with pytest.raises(ValueError, match="Invalid account name"):
+            Config.validate_account_name("work\n")
+
+    def test_overlong_name_rejected(self):
+        with pytest.raises(ValueError):
+            Config.validate_account_name("a" * 200)
+
+
+class TestAccountDirPermissions:
+    """Security: per-account dirs (holding tokens) must be private (0o700)."""
+
+    def test_account_dir_is_owner_only(self, config_dir):
+        import stat
+        config = Config()
+        config.add_account("work")
+        d = config.get_account_dir("work")
+        mode = stat.S_IMODE(d.stat().st_mode)
+        assert mode == 0o700, oct(mode)

@@ -203,3 +203,135 @@ class TestAuthWithAccount:
         assert result.exit_code == 0
         output = json.loads(result.stdout)
         assert output["operation"] == "auth.logout"
+
+
+class TestSetModeGlobal:
+    """Tests for 'gws config set-mode' on the global config (H1)."""
+
+    def test_set_mode_server_without_url_preserves_inherited_url(self, config_dir):
+        """Switching to server mode without --url must inherit the existing
+        global server_url/provider, not wipe them (H1 regression)."""
+        config = Config()
+        config.server_url = "https://relay.example.com"
+        config.server_provider = "google-workspace"
+        config.mode = "local"
+        config.save()
+
+        result = runner.invoke(app, ["config", "set-mode", "server"])
+        assert result.exit_code == 0, result.stdout
+
+        reloaded = Config.load()
+        assert reloaded.mode == "server"
+        # The inherited values must survive the mode switch.
+        assert reloaded.server_url == "https://relay.example.com"
+        assert reloaded.server_provider == "google-workspace"
+
+    def test_set_mode_server_inherited_url_is_reported(self, config_dir):
+        """The effective server_url should be visible in the output, not hidden
+        just because --url was omitted."""
+        config = Config()
+        config.server_url = "https://relay.example.com"
+        config.server_provider = "google-workspace"
+        config.mode = "local"
+        config.save()
+
+        result = runner.invoke(app, ["config", "set-mode", "server"])
+        output = json.loads(result.stdout)
+        assert output["server_url"] == "https://relay.example.com"
+
+    def test_set_mode_local_clears_server_url(self, config_dir):
+        """Switching to local mode clears the global server_url (existing behavior)."""
+        config = Config()
+        config.server_url = "https://relay.example.com"
+        config.server_provider = "google-workspace"
+        config.mode = "server"
+        config.save()
+
+        result = runner.invoke(app, ["config", "set-mode", "local"])
+        assert result.exit_code == 0, result.stdout
+
+        reloaded = Config.load()
+        assert reloaded.mode == "local"
+        assert reloaded.server_url is None
+        assert reloaded.server_provider is None
+
+    def test_set_mode_server_with_explicit_url_overrides(self, config_dir):
+        """Passing --url still updates the global server_url."""
+        config = Config()
+        config.server_url = "https://old.example.com"
+        config.mode = "local"
+        config.save()
+
+        result = runner.invoke(
+            app, ["config", "set-mode", "server", "--url", "https://new.example.com"]
+        )
+        assert result.exit_code == 0, result.stdout
+
+        reloaded = Config.load()
+        assert reloaded.mode == "server"
+        assert reloaded.server_url == "https://new.example.com"
+
+
+class TestModeVisibility:
+    """UX: the active auth mode must be discoverable (the original complaint)."""
+
+    def test_auth_status_includes_mode_local(self, config_dir):
+        config = Config()
+        config.add_account("work")
+        config.save()
+
+        result = runner.invoke(app, ["auth", "status", "--account", "work"])
+        output = json.loads(result.stdout)
+        assert output["mode"] == "local"
+
+    def test_auth_status_server_mode_shows_url(self, config_dir):
+        config = Config()
+        config.add_account("work")
+        config.save()
+        config.save_account_config(
+            "work",
+            {"mode": "server", "server_url": "https://relay.example.com",
+             "server_provider": "google-workspace"},
+        )
+
+        with patch(
+            "gws.auth.server.ServerAuthProvider.check_credentials",
+            return_value=(False, "no_token", None),
+        ):
+            result = runner.invoke(app, ["auth", "status", "--account", "work"])
+        output = json.loads(result.stdout)
+        assert output["mode"] == "server"
+        assert output["server_url"] == "https://relay.example.com"
+        assert output["provider"] == "google-workspace"
+
+    def test_account_list_includes_per_account_mode(self, config_dir):
+        config = Config()
+        config.add_account("work")
+        config.add_account("home")
+        config.save()
+        config.save_account_config(
+            "work", {"mode": "server", "server_url": "https://relay.example.com"}
+        )
+
+        result = runner.invoke(app, ["account", "list"])
+        output = json.loads(result.stdout)
+        assert output["accounts"]["work"]["mode"] == "server"
+        assert output["accounts"]["work"]["server_url"] == "https://relay.example.com"
+        assert output["accounts"]["home"]["mode"] == "local"
+
+    def test_auth_help_explains_bare_auth_logs_in(self, config_dir):
+        result = runner.invoke(app, ["auth", "--help"])
+        text = result.stdout.lower()
+        assert "mode" in text and "log" in text
+
+
+class TestAuthInvalidAccount:
+    """M1: bad --account in the bare auth path must be a clean JSON error."""
+
+    def test_auth_invalid_account_name_is_clean_error(self, config_dir):
+        result = runner.invoke(app, ["auth", "--account", "bad name"])
+        # No uncaught exception / traceback
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        output = json.loads(result.stdout)
+        assert output["status"] == "error"
+        assert result.exit_code != 0

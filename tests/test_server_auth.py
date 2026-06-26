@@ -458,3 +458,20 @@ class TestServerAuthTokenHandling:
 
         loaded = json.loads(token_path.read_text())
         assert loaded["client_id"] == "server-managed"
+
+
+def test_validate_auth_url_rejects_non_https():
+    import pytest
+    from gws.auth.server import _validate_auth_url
+    from gws.exceptions import AuthError
+
+    with pytest.raises(AuthError):
+        _validate_auth_url("http://evil.example.com/steal")
+    with pytest.raises(AuthError):
+        _validate_auth_url("javascript:alert(1)")
+
+
+def test_validate_auth_url_accepts_google_consent_url():
+    from gws.auth.server import _validate_auth_url
+    # Must not raise for the legitimate Google consent host.
+    _validate_auth_url("https://accounts.google.com/o/oauth2/v2/auth?client_id=x")

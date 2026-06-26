@@ -11,7 +11,7 @@ import time
 import webbrowser
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
 from google.oauth2.credentials import Credentials
@@ -19,6 +19,33 @@ from google.oauth2.credentials import Credentials
 from gws.config import Config
 from gws.crypto import save_encrypted, load_encrypted, delete_encrypted
 from gws.exceptions import AuthError
+
+
+# Recognised Google OAuth consent hosts the relay may legitimately return.
+_KNOWN_AUTH_HOSTS = {"accounts.google.com"}
+
+
+def _validate_auth_url(auth_url: str) -> None:
+    """Validate a relay-supplied authorization URL before opening a browser.
+
+    Hard-fails on anything that is not an ``https://`` URL with a host — this
+    blocks scheme-downgrade and non-web schemes (``javascript:``, ``file:`` …)
+    that a malicious or compromised relay could return. The host is only warned
+    on (not blocked) when unrecognised, because the relay legitimately returns
+    Google consent URLs and the set of valid hosts may evolve.
+    """
+    parsed = urlparse(auth_url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise AuthError(
+            "Relay returned an unsafe authorization URL",
+            f"Refusing to open a non-https URL: {auth_url!r}",
+        )
+    if parsed.hostname not in _KNOWN_AUTH_HOSTS:
+        print(
+            f"[gws-cli] Warning: authorization URL host '{parsed.hostname}' is not a "
+            "recognised Google OAuth host. Continue only if you trust this relay.",
+            file=sys.stderr,
+        )
 
 
 class ServerAuthProvider:
@@ -398,6 +425,7 @@ class ServerAuthProvider:
 
         start_data = resp.json()
         auth_url = start_data["auth_url"]
+        _validate_auth_url(auth_url)
         session_id = start_data["session_id"]
 
         print("\n" + "=" * 60, file=sys.stderr)
