@@ -328,15 +328,32 @@ All commands use `uvx gws-cli <service> <command>`. Authentication is automatic 
 > **Important**: `gws-cli auth` and `gws-cli auth --force` open a browser for OAuth. These must be run by the user in their terminal, not from Claude Code.
 
 ```bash
-uvx gws-cli auth              # Authenticate (opens browser)
-uvx gws-cli auth status       # Check auth status
+uvx gws-cli auth              # Authenticate using the configured mode (opens browser)
+uvx gws-cli auth status       # Check auth status — reports the active mode
 uvx gws-cli auth --force      # Force re-authentication (opens browser)
-uvx gws-cli auth logout       # Logout
+uvx gws-cli auth logout       # Logout (best-effort revokes the token upstream)
 # Auth commands support --account for multi-account
 uvx gws-cli auth status --account work
 ```
 
 Credentials stored in `~/.config/gws-cli/` (`client_secret.json`, `token.json`, `gws_config.json`).
+
+### Auth modes: local vs server
+
+`gws-cli auth` (with no subcommand) logs in using the configured **mode**:
+
+- **local** (default) — direct OAuth with your own `client_secret.json` via a browser loopback flow.
+- **server** — delegates auth to an `oauth-token-relay` server (no local OAuth client needed).
+
+`auth status` reports the active mode, and `account list` shows the mode per account. Switch with:
+
+```bash
+uvx gws-cli config set-mode local                     # Use local OAuth (default)
+uvx gws-cli config set-mode server --url <relay-url>  # Use a relay server
+uvx gws-cli config set-mode local -a personal         # Per-account override
+```
+
+Each account can have its own mode; a per-account setting overrides the global default.
 
 ## Multi-Account Support
 
