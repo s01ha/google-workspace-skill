@@ -48,8 +48,16 @@ EOF
 uvx gws-cli gmail send "recipient@example.com" "Subject" "Body" \
     --from-name "John Doe" --signature "Best regards,\nJohn"
 
-# Reply to message
+# Reply to message (stays in-thread via In-Reply-To/References)
 uvx gws-cli gmail reply <message_id> "Reply body"
+
+# Reply with Cc/Bcc
+uvx gws-cli gmail reply <message_id> "Reply body" --cc "a@x.com,b@y.com" --bcc "c@z.com"
+
+# Reply-all: also address the original To + Cc (excluding yourself).
+# Combine with --cc to add extra recipients on top.
+uvx gws-cli gmail reply <message_id> "Reply body" --all
+uvx gws-cli gmail reply <message_id> "Reply body" --all --cc "extra@x.com"
 
 # Mark as read/unread
 uvx gws-cli gmail mark-read <message_id>

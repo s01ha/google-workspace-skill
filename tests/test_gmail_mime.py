@@ -351,3 +351,124 @@ class TestGetProfile:
         with patch.object(BaseService, "execute", side_effect=http_error):
             result = gmail_service.get_profile()
             assert result == {}
+
+
+# =============================================================================
+# DRAFT HEADER CASE-INSENSITIVITY TESTS
+# =============================================================================
+
+
+class TestDraftHeaderCase:
+    """Drafts built via MIMEText store lowercase header names ('to','cc',
+    'subject'); reads must be case-insensitive or they come back empty."""
+
+    def _lowercase_draft(self):
+        return {
+            "id": "draft-1",
+            "message": {
+                "id": "msg-1",
+                "payload": {
+                    "headers": [
+                        {"name": "to", "value": "a@x.com"},
+                        {"name": "cc", "value": "c@x.com"},
+                        {"name": "subject", "value": "Hello there"},
+                    ],
+                    "body": {},
+                },
+            },
+        }
+
+    def test_get_draft_reads_lowercase_headers(self, gmail_service):
+        gmail_service._mock_gmail_api.users().drafts().get().execute.return_value = (
+            self._lowercase_draft()
+        )
+        with patch("gws.services.gmail.output_external_content") as mock_out:
+            gmail_service.get_draft("draft-1")
+        kwargs = mock_out.call_args.kwargs
+        assert kwargs["to"] == "a@x.com"
+        assert kwargs["cc"] == "c@x.com"
+        assert kwargs["content_fields"]["subject"] == "Hello there"
+
+    def test_update_draft_body_only_preserves_recipients(self, gmail_service):
+        """Updating only the body must not wipe to/cc/subject (lowercase headers)."""
+        gmail_service._mock_gmail_api.users().drafts().get().execute.return_value = (
+            self._lowercase_draft()
+        )
+        gmail_service._mock_gmail_api.users().drafts().update().execute.return_value = {
+            "id": "draft-1"
+        }
+        gmail_service.update_draft("draft-1", body="brand new body")
+
+        update_call = gmail_service._mock_gmail_api.users().drafts().update
+        raw_b64 = update_call.call_args.kwargs["body"]["message"]["raw"]
+        mime = email.message_from_bytes(base64.urlsafe_b64decode(raw_b64))
+        assert mime["to"] == "a@x.com"
+        assert mime["subject"] == "Hello there"
+        assert mime["cc"] == "c@x.com"
+
+
+# =============================================================================
+# REPLY CC/BCC + REPLY-ALL TESTS
+# =============================================================================
+
+
+class TestReplyRecipients:
+    """reply must support --cc/--bcc and --all (reply-all), while still
+    threading (In-Reply-To/References)."""
+
+    def _setup(self, gmail_service, orig_headers):
+        gmail_service._mock_gmail_api.users().messages().get().execute.return_value = {
+            "id": "m1",
+            "threadId": "t1",
+            "payload": {
+                "headers": [{"name": k, "value": v} for k, v in orig_headers.items()]
+            },
+        }
+        gmail_service._mock_gmail_api.users().messages().send().execute.return_value = {
+            "id": "r1",
+            "threadId": "t1",
+        }
+
+    def test_reply_with_cc_and_bcc(self, gmail_service, capsys):
+        self._setup(gmail_service, {
+            "from": "alice@x.com", "subject": "Hi", "message-id": "<m1@x>",
+        })
+        gmail_service.reply_to_message("m1", "body", cc="c@x.com", bcc="b@x.com")
+        capsys.readouterr()
+        mime = decode_raw_message(gmail_service._mock_gmail_api)
+        assert mime["to"] == "alice@x.com"
+        assert mime["cc"] == "c@x.com"
+        assert mime["bcc"] == "b@x.com"
+        assert mime["In-Reply-To"] == "<m1@x>"  # still threads
+
+    def test_reply_all_gathers_recipients_minus_self(self, gmail_service, capsys):
+        with patch.object(GmailService, "get_profile",
+                          return_value={"emailAddress": "me@x.com"}):
+            self._setup(gmail_service, {
+                "from": "alice@x.com",
+                "to": "me@x.com, bob@x.com",
+                "cc": "carol@x.com, me@x.com",
+                "subject": "Hi", "message-id": "<m1@x>",
+            })
+            gmail_service.reply_to_message("m1", "body", reply_all=True)
+        capsys.readouterr()
+        mime = decode_raw_message(gmail_service._mock_gmail_api)
+        to = mime["to"]
+        assert "alice@x.com" in to and "bob@x.com" in to
+        assert "me@x.com" not in to            # self excluded
+        cc = mime["cc"] or ""
+        assert "carol@x.com" in cc
+        assert "me@x.com" not in cc            # self excluded from cc too
+
+    def test_reply_all_unions_explicit_cc(self, gmail_service, capsys):
+        with patch.object(GmailService, "get_profile",
+                          return_value={"emailAddress": "me@x.com"}):
+            self._setup(gmail_service, {
+                "from": "alice@x.com", "cc": "carol@x.com",
+                "subject": "Hi", "message-id": "<m1@x>",
+            })
+            gmail_service.reply_to_message("m1", "body", reply_all=True, cc="dan@x.com")
+        capsys.readouterr()
+        mime = decode_raw_message(gmail_service._mock_gmail_api)
+        cc = mime["cc"] or ""
+        assert "carol@x.com" in cc and "dan@x.com" in cc

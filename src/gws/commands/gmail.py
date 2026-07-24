@@ -138,8 +138,24 @@ def reply_to_message(
         Optional[str],
         typer.Option("--signature", "-s", help="Email signature to append."),
     ] = None,
+    cc: Annotated[
+        Optional[str],
+        typer.Option("--cc", help="Cc recipients (comma-separated)."),
+    ] = None,
+    bcc: Annotated[
+        Optional[str],
+        typer.Option("--bcc", help="Bcc recipients (comma-separated)."),
+    ] = None,
+    reply_all: Annotated[
+        bool,
+        typer.Option("--all", help="Reply to all: include original To/Cc (minus yourself)."),
+    ] = False,
 ) -> None:
-    """Reply to an existing message (HTML by default)."""
+    """Reply to an existing message (HTML by default, stays in-thread).
+
+    Use --all to reply to everyone (original To + Cc, excluding yourself);
+    --cc/--bcc add recipients and are unioned with --all.
+    """
     if stdin:
         body = sys.stdin.read()
     elif body is None:
@@ -157,6 +173,9 @@ def reply_to_message(
         html=not plain_text,
         from_name=from_name,
         signature=signature,
+        cc=cc,
+        bcc=bcc,
+        reply_all=reply_all,
     )
 
 

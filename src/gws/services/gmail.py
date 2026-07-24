@@ -8,6 +8,7 @@ from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formataddr, getaddresses
 from typing import Any
 
 from googleapiclient.errors import HttpError
@@ -176,6 +177,37 @@ class GmailService(BaseService):
             )
             raise SystemExit(ExitCode.API_ERROR)
 
+    def _header_map(self, payload: dict) -> dict[str, str]:
+        """Return a case-insensitive header map keyed by lowercase name.
+
+        Gmail returns header names with the case they were written in. Messages
+        built locally via MIMEText use lowercase names ('to', 'cc', 'subject'),
+        so any read of draft/self-built headers MUST look them up case-
+        insensitively or they come back empty.
+        """
+        return {
+            h["name"].lower(): h["value"]
+            for h in payload.get("headers", [])
+        }
+
+    @staticmethod
+    def _merge_addresses(values: list[str], exclude: list[str] | None = None) -> str:
+        """Parse address header strings, drop excluded emails (case-insensitive)
+        and duplicates while preserving order, and return a comma-joined string.
+        """
+        exclude_l = {e.lower() for e in (exclude or []) if e}
+        seen: set[str] = set()
+        out: list[str] = []
+        for name, addr in getaddresses([v for v in values if v]):
+            if not addr:
+                continue
+            key = addr.lower()
+            if key in exclude_l or key in seen:
+                continue
+            seen.add(key)
+            out.append(formataddr((name, addr)) if name else addr)
+        return ", ".join(out)
+
     def _extract_body(self, payload: dict) -> str:
         """Extract message body from payload."""
         if "body" in payload and payload["body"].get("data"):
@@ -309,8 +341,16 @@ class GmailService(BaseService):
         html: bool = False,
         from_name: str | None = None,
         signature: str | None = None,
+        cc: str | None = None,
+        bcc: str | None = None,
+        reply_all: bool = False,
     ) -> dict[str, Any]:
-        """Reply to an existing message."""
+        """Reply to an existing message (stays threaded via In-Reply-To/References).
+
+        By default replies only to the sender. With reply_all=True, also
+        addresses the original To recipients and Cc's the original Cc list,
+        excluding your own address. Explicit cc/bcc are unioned in.
+        """
         try:
             # Unescape shell-escaped characters
             body = self._unescape_text(body)
@@ -325,35 +365,59 @@ class GmailService(BaseService):
             )
 
             thread_id = original["threadId"]
-            headers = {
-                h["name"]: h["value"]
-                for h in original.get("payload", {}).get("headers", [])
-            }
+            # Case-insensitive: sent/self-built messages may use lowercase names.
+            ci_headers = self._header_map(original.get("payload", {}))
 
             # Append signature if provided
             full_body = body
             if signature:
                 full_body = f"{body}\n\n--\n{signature}"
 
-            # Build reply - use MIMEText directly
             subtype = "html" if html else "plain"
             message = MIMEText(full_body, subtype, "utf-8")
 
-            # Set From with display name if provided
-            if from_name:
-                profile = self.get_profile()
-                email_address = profile.get("emailAddress", "")
-                if email_address:
-                    message["from"] = f'"{from_name}" <{email_address}>'
+            # Our own address — needed to set a named From and to exclude
+            # ourselves from reply-all recipients.
+            self_email = ""
+            if from_name or reply_all:
+                self_email = self.get_profile().get("emailAddress", "")
+            if from_name and self_email:
+                message["from"] = f'"{from_name}" <{self_email}>'
 
-            # Reply to the sender — use case-insensitive header lookup
-            # Gmail API may return lowercase header names (from, to) for sent messages
-            ci_headers = {k.lower(): v for k, v in headers.items()}
-            reply_to = ci_headers.get("reply-to", ci_headers.get("from", ""))
-            if not reply_to:
-                reply_to = ci_headers.get("to", "")
-            message["to"] = reply_to
+            # Primary recipient: original sender (Reply-To > From > To).
+            reply_to = (
+                ci_headers.get("reply-to")
+                or ci_headers.get("from")
+                or ci_headers.get("to", "")
+            )
+            if reply_all:
+                to_value = self._merge_addresses(
+                    [reply_to, ci_headers.get("to", "")], exclude=[self_email]
+                )
+            else:
+                to_value = reply_to
+            message["to"] = to_value
             message["subject"] = f"Re: {ci_headers.get('subject', '')}"
+
+            # Cc: original Cc (reply-all only) unioned with an explicit --cc,
+            # minus ourselves and anyone already addressed in To.
+            cc_sources = []
+            if reply_all:
+                cc_sources.append(ci_headers.get("cc", ""))
+            if cc:
+                cc_sources.append(cc)
+            if cc_sources:
+                to_emails = [addr for _, addr in getaddresses([to_value])]
+                combined_cc = self._merge_addresses(
+                    cc_sources, exclude=[self_email, *to_emails]
+                )
+                if combined_cc:
+                    message["cc"] = combined_cc
+
+            if bcc:
+                bcc_value = self._merge_addresses([bcc], exclude=[self_email])
+                if bcc_value:
+                    message["bcc"] = bcc_value
 
             # Set references for threading
             message_id_header = ci_headers.get("message-id", "")
@@ -694,16 +758,13 @@ class GmailService(BaseService):
                         continue
 
                     msg = draft.get("message", {})
-                    headers = {
-                        h["name"]: h["value"]
-                        for h in msg.get("payload", {}).get("headers", [])
-                    }
+                    headers = self._header_map(msg.get("payload", {}))
 
                     drafts.append({
                         "id": draft["id"],
                         "message_id": msg.get("id"),
-                        "subject": headers.get("Subject", "(no subject)"),
-                        "to": headers.get("To", ""),
+                        "subject": headers.get("subject", "(no subject)"),
+                        "to": headers.get("to", ""),
                         "snippet": msg.get("snippet", "")[:100],
                     })
 
@@ -737,10 +798,7 @@ class GmailService(BaseService):
             )
 
             msg = draft.get("message", {})
-            headers = {
-                h["name"]: h["value"]
-                for h in msg.get("payload", {}).get("headers", [])
-            }
+            headers = self._header_map(msg.get("payload", {}))
 
             body = self._extract_body(msg.get("payload", {}))
 
@@ -749,13 +807,13 @@ class GmailService(BaseService):
                 source_type="email",
                 source_id=draft["id"],
                 content_fields={
-                    "subject": headers.get("Subject", "(no subject)"),
+                    "subject": headers.get("subject", "(no subject)"),
                     "body": body,
                 },
                 draft_id=draft["id"],
                 message_id=msg.get("id"),
-                to=headers.get("To", ""),
-                cc=headers.get("Cc", ""),
+                to=headers.get("to", ""),
+                cc=headers.get("cc", ""),
             )
             return draft
         except HttpError as e:
@@ -854,18 +912,15 @@ class GmailService(BaseService):
             )
 
             current_msg = current_draft.get("message", {})
-            current_headers = {
-                h["name"]: h["value"]
-                for h in current_msg.get("payload", {}).get("headers", [])
-            }
+            current_headers = self._header_map(current_msg.get("payload", {}))
             current_body = self._extract_body(current_msg.get("payload", {}))
 
             # Use new values or preserve existing
-            final_to = to if to is not None else current_headers.get("To", "")
-            final_subject = subject if subject is not None else current_headers.get("Subject", "")
+            final_to = to if to is not None else current_headers.get("to", "")
+            final_subject = subject if subject is not None else current_headers.get("subject", "")
             final_body = body if body is not None else current_body
-            final_cc = cc if cc is not None else current_headers.get("Cc")
-            final_bcc = bcc if bcc is not None else current_headers.get("Bcc")
+            final_cc = cc if cc is not None else current_headers.get("cc")
+            final_bcc = bcc if bcc is not None else current_headers.get("bcc")
 
             # Unescape shell-escaped characters
             final_subject = self._unescape_text(final_subject)
