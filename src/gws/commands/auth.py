@@ -31,7 +31,7 @@ def auth_default(
         bool,
         typer.Option(
             "--headless",
-            help="Do not open a browser; paste the full loopback redirect URL.",
+            help="Do not launch a local browser; use the provider's headless flow.",
         ),
     ] = False,
     account: Annotated[

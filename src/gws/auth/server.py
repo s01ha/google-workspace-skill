@@ -409,7 +409,7 @@ class ServerAuthProvider:
         """
         from gws.auth.scopes import get_scopes_for_services
 
-        server_token = self._ensure_server_token()
+        server_token = self._ensure_server_token(headless=headless)
         scopes = get_scopes_for_services(
             self.config.enabled_services,
             read_only=self.config.read_only,
@@ -627,7 +627,11 @@ class ServerAuthProvider:
         save_encrypted(self._server_token_path, token_data, self.config.get_encryption_key())
         self._server_token = token_data
 
-    def _ensure_server_token(self, auto_login: bool = True) -> dict[str, Any]:
+    def _ensure_server_token(
+        self,
+        auto_login: bool = True,
+        headless: bool = False,
+    ) -> dict[str, Any]:
         """Load server token, auto-triggering login if needed.
 
         When auto_login is True (the default), missing server tokens trigger
@@ -646,7 +650,7 @@ class ServerAuthProvider:
 
         # Auto-trigger server login — one fewer manual step for the user
         print("No server token found — starting server authentication...\n", file=sys.stderr)
-        self.server_login()
+        self.server_login(device_flow=headless)
 
         token = self._load_server_token()
         if not token:

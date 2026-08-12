@@ -1,8 +1,11 @@
 """Tests for local OAuth authentication on headless servers."""
 
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs, urlparse
 
 import pytest
+from google_auth_oauthlib.flow import InstalledAppFlow
+from oauthlib.oauth2 import InvalidGrantError
 from requests.exceptions import ConnectionError
 
 from gws.auth.oauth import LocalAuthProvider, _validate_headless_redirect
@@ -26,6 +29,32 @@ def _mock_flow(state: str = "expected-state") -> MagicMock:
     credentials.valid = True
     flow.credentials = credentials
     return flow
+
+
+def test_real_installed_app_flow_generates_pkce_s256_challenge() -> None:
+    client_config = {
+        "installed": {
+            "client_id": "test.apps.googleusercontent.com",
+            "client_secret": "test-secret",
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": ["http://localhost"],
+        }
+    }
+    flow = InstalledAppFlow.from_client_config(
+        client_config,
+        scopes=["openid"],
+        autogenerate_code_verifier=True,
+    )
+    flow.redirect_uri = "http://127.0.0.1:8080/"
+
+    authorization_url, state = flow.authorization_url()
+    query = parse_qs(urlparse(authorization_url).query)
+
+    assert query["state"] == [state]
+    assert query["code_challenge_method"] == ["S256"]
+    assert query["code_challenge"][0]
+    assert flow.code_verifier
 
 
 def test_headless_flow_exchanges_full_redirect_without_local_server(
@@ -79,6 +108,12 @@ def test_default_flow_still_uses_local_server(provider: LocalAuthProvider) -> No
         ("http://user@127.0.0.1:8080/?code=x&state=expected-state", "redirect URI"),
         ("http://127.0.0.1:bad/?code=x&state=expected-state", "redirect URI"),
         ("http://127.0.0.1:8080/?error=access_denied&state=expected-state", "denied"),
+        ("http://127.0.0.1:8080/?error=access_denied&state=wrong", "state"),
+        ("http://127.0.0.1:8080/?error=access_denied", "state"),
+        (
+            "http://127.0.0.1:8080/?error=access_denied&state=expected-state&state=other",
+            "state",
+        ),
         ("http://127.0.0.1:8080/?code=x&code=y&state=expected-state", "exactly one"),
         ("http://127.0.0.1:8080/?code=x&state=expected-state#fragment", "fragment"),
     ],
@@ -148,6 +183,46 @@ def test_headless_flow_wraps_token_exchange_network_error(provider: LocalAuthPro
         pytest.raises(AuthError, match="exchange"),
     ):
         provider.get_credentials(headless=True)
+
+
+def test_headless_flow_wraps_oauth_protocol_error_without_leaking_code(
+    provider: LocalAuthProvider,
+    capsys,
+) -> None:
+    flow = _mock_flow()
+    flow.fetch_token.side_effect = InvalidGrantError()
+    redirect = "http://127.0.0.1:8080/?code=SECRET-CODE&state=expected-state"
+
+    with (
+        patch("gws.auth.oauth.load_encrypted", return_value={"installed": {}}),
+        patch("gws.auth.oauth.InstalledAppFlow.from_client_config", return_value=flow),
+        patch.object(provider, "_find_available_port", return_value=8080),
+        patch("gws.auth.oauth.getpass", return_value=redirect),
+        pytest.raises(AuthError, match="exchange"),
+    ):
+        provider.get_credentials(headless=True)
+
+    captured = capsys.readouterr()
+    assert "SECRET-CODE" not in captured.out
+    assert "SECRET-CODE" not in captured.err
+
+
+def test_server_headless_bootstrap_uses_device_flow() -> None:
+    provider = object.__new__(ServerAuthProvider)
+    provider._server_token = None
+
+    with (
+        patch.object(
+            provider,
+            "_load_server_token",
+            side_effect=[None, {"access_token": "server"}],
+        ),
+        patch.object(provider, "server_login") as server_login,
+    ):
+        token = provider._ensure_server_token(headless=True)
+
+    assert token == {"access_token": "server"}
+    server_login.assert_called_once_with(device_flow=True)
 
 
 def test_server_headless_flow_does_not_open_browser() -> None:

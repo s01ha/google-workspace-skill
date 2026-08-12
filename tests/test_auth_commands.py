@@ -46,4 +46,4 @@ def test_auth_help_documents_headless_option() -> None:
 
     assert result.exit_code == 0
     assert "--headless" in result.stdout
-    assert "redirect URL" in result.stdout
+    assert "provider's headless flow" in result.stdout

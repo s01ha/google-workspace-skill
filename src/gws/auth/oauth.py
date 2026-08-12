@@ -12,6 +12,7 @@ import google.auth.exceptions
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
+from oauthlib.oauth2 import OAuth2Error
 from requests.exceptions import RequestException
 
 from gws.auth.scopes import get_scopes_for_services
@@ -52,15 +53,15 @@ def _validate_headless_redirect(
         raise AuthError("Invalid OAuth redirect: URL fragments are not accepted.")
 
     query = parse_qs(parsed.query, keep_blank_values=True)
+    states = query.get("state", [])
+    if len(states) != 1 or not secrets.compare_digest(states[0], expected_state):
+        raise AuthError("OAuth state validation failed.")
+
     if "error" in query:
         error = query["error"][0]
         if error == "access_denied":
             raise AuthError("Google authorization was denied.")
         raise AuthError("Google authorization failed.")
-
-    states = query.get("state", [])
-    if len(states) != 1 or not secrets.compare_digest(states[0], expected_state):
-        raise AuthError("OAuth state validation failed.")
 
     codes = query.get("code", [])
     if len(codes) != 1 or not codes[0]:
@@ -256,7 +257,7 @@ class LocalAuthProvider:
         _validate_headless_redirect(redirect_url, redirect_uri, state)
         try:
             flow.fetch_token(authorization_response=redirect_url)
-        except (ValueError, OSError, RequestException) as exc:
+        except (OAuth2Error, ValueError, OSError, RequestException) as exc:
             raise AuthError(
                 "Failed to exchange the OAuth authorization code.",
                 "The code may be expired or already used. Run the command again.",
