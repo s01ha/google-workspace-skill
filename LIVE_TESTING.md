@@ -273,3 +273,21 @@ Manual testing of all CLI operations against real Google Workspace accounts.
 |------|-------------|
 | 2026-02-05 | Initial test run: Infra, Drive, Docs, Sheets, Slides, Gmail. Fixed 10 bugs. |
 | 2026-02-06 | Completed: Calendar, Contacts, Convert. Fixed 2 bugs (Slides). All 217 tests done. |
+# Headless OAuth authentication
+
+Run this check on a Linux headless server with an imported **Desktop application**
+OAuth client. Do not paste the final redirect URL into logs, tickets, or chat.
+
+```bash
+uvx gws-cli auth --headless --force
+```
+
+1. Open the printed Google authorization URL on another computer.
+2. Complete consent. A connection failure at `127.0.0.1` is expected.
+3. Copy the entire browser address and paste it into the hidden CLI prompt.
+4. Verify `uvx gws-cli auth status` reports authenticated.
+5. Run one read-only command, then `uvx gws-cli auth logout` if this was a test account.
+
+Expected security behavior: wrong state, wrong loopback port, missing/multiple code,
+fragment, malformed URL, and provider denial are rejected without printing the
+pasted URL or authorization code.
