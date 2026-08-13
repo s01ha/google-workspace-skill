@@ -1,5 +1,6 @@
 """Tests for local OAuth authentication on headless servers."""
 
+import json
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
@@ -8,7 +9,11 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from oauthlib.oauth2 import InvalidGrantError
 from requests.exceptions import ConnectionError
 
-from gws.auth.oauth import LocalAuthProvider, _validate_headless_redirect
+from gws.auth.oauth import (
+    LocalAuthProvider,
+    _fetch_headless_token,
+    _validate_headless_redirect,
+)
 from gws.auth.server import ServerAuthProvider
 from gws.config import Config
 from gws.exceptions import AuthError
@@ -57,6 +62,45 @@ def test_real_installed_app_flow_generates_pkce_s256_challenge() -> None:
     assert flow.code_verifier
 
 
+def test_real_installed_app_flow_accepts_pasted_http_loopback_response() -> None:
+    client_config = {
+        "installed": {
+            "client_id": "test.apps.googleusercontent.com",
+            "client_secret": "test-secret",
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": ["http://localhost"],
+        }
+    }
+    flow = InstalledAppFlow.from_client_config(
+        client_config,
+        scopes=["openid"],
+        autogenerate_code_verifier=True,
+    )
+    flow.redirect_uri = "http://127.0.0.1:8080/"
+    _, state = flow.authorization_url()
+    redirect = f"http://127.0.0.1:8080/?code=one-time-code&state={state}"
+    token = {
+        "access_token": "access-token",
+        "refresh_token": "refresh-token",
+        "expires_in": 3600,
+        "token_type": "Bearer",
+    }
+
+    with patch.object(flow.oauth2session, "request") as request:
+        response = MagicMock(status_code=200, headers={}, text=json.dumps(token))
+        response.request = MagicMock(url="https://oauth2.googleapis.com/token", headers={}, body="")
+        request.return_value = response
+
+        _fetch_headless_token(flow, redirect)
+
+    assert flow.credentials.token == "access-token"
+    token_request = request.call_args.kwargs["data"]
+    assert token_request["redirect_uri"] == "http://127.0.0.1:8080/"
+    assert token_request["code"] == "one-time-code"
+    assert token_request["code_verifier"] == flow.code_verifier
+
+
 def test_headless_flow_exchanges_full_redirect_without_local_server(
     provider: LocalAuthProvider,
 ) -> None:
@@ -75,7 +119,9 @@ def test_headless_flow_exchanges_full_redirect_without_local_server(
 
     assert credentials is flow.credentials
     assert flow.redirect_uri == "http://127.0.0.1:8080/"
-    flow.fetch_token.assert_called_once_with(authorization_response=redirect)
+    flow.fetch_token.assert_called_once_with(
+        authorization_response="https://127.0.0.1:8080/?code=one-time-code&state=expected-state"
+    )
     flow.run_local_server.assert_not_called()
     open_browser.assert_not_called()
     save_credentials.assert_called_once_with()

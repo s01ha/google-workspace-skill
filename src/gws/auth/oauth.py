@@ -70,6 +70,20 @@ def _validate_headless_redirect(
         raise AuthError("OAuth redirect is missing the authorization code.")
 
 
+def _fetch_headless_token(flow: InstalledAppFlow, redirect_url: str) -> None:
+    """Exchange a validated loopback response without weakening OAuthlib globally.
+
+    OAuthlib rejects plain-HTTP authorization responses even for native-app
+    loopback redirects. ``InstalledAppFlow.run_local_server`` works around this
+    by changing only the response URL used for parsing to HTTPS while retaining
+    the original HTTP redirect URI in the token request. Mirror that behavior
+    for the manually pasted headless response.
+    """
+    parsed = urlparse(redirect_url.strip())
+    authorization_response = parsed._replace(scheme="https").geturl()
+    flow.fetch_token(authorization_response=authorization_response)
+
+
 class LocalAuthProvider:
     """Local OAuth authentication provider using client_secret.json.
 
@@ -256,7 +270,7 @@ class LocalAuthProvider:
 
         _validate_headless_redirect(redirect_url, redirect_uri, state)
         try:
-            flow.fetch_token(authorization_response=redirect_url)
+            _fetch_headless_token(flow, redirect_url)
         except (OAuth2Error, ValueError, OSError, RequestException) as exc:
             raise AuthError(
                 "Failed to exchange the OAuth authorization code.",
